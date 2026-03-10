@@ -6,20 +6,20 @@ import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProo
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-/**
- * @title AresRewardDistributor
- * @notice Scalable Merkle-based reward claim system.
- * @dev Extremely generic gas efficient double claim protection using a bitmap.
- */
+// This contract lets users claim token rewards securely.
+// It uses a Merkle Tree so we don't have to store everyone's balance on-chain.
 contract AresRewardDistributor is IAresTreasury {
     using SafeERC20 for IERC20;
 
+    // The single hash representing all users and balances
     bytes32 public merkleRoot;
+    
+    // The token being given away
     IERC20 public immutable rewardToken;
     address public immutable owner;
 
-    // Bitmap tracks claims by user index to save massive gas.
-    // 256 bits per slot, saving 255 mappings per full slot vs address => bool.
+    // A gas-efficient way to remember who has already claimed.
+    // We pack 256 boolean (true/false) values into a single uint256 number.
     mapping(uint256 => uint256) private claimedBitMap;
 
     event MerkleRootUpdated(bytes32 newRoot);
@@ -36,49 +36,48 @@ contract AresRewardDistributor is IAresTreasury {
         owner = _owner;
     }
 
-    /**
-     * @notice Updates the Merkle root for new claim epochs.
-     */
+    // The owner can update the root to add new rewards
     function updateMerkleRoot(bytes32 newRoot) external onlyOwner {
         merkleRoot = newRoot;
         emit MerkleRootUpdated(newRoot);
     }
 
-    /**
-     * @notice Checks if an index has been claimed.
-     * @dev Extracts the word index and the bit index.
-     */
+    // Check if a specific user index has already claimed their reward
     function isClaimed(uint256 index) public view returns (bool) {
+        // Find which 256-bit block the user belongs to
         uint256 claimedWordIndex = index / 256;
+        // Find their specific spot inside that block
         uint256 claimedBitIndex = index % 256;
+        
         uint256 claimedWord = claimedBitMap[claimedWordIndex];
+        
+        // Create a mask (e.g., 00001000) to check just their spot
         uint256 mask = (1 << claimedBitIndex);
         return claimedWord & mask == mask;
     }
 
-    /**
-     * @notice Sets an index as claimed.
-     */
+    // Mark a user's spot as claimed
     function _setClaimed(uint256 index) private {
         uint256 claimedWordIndex = index / 256;
         uint256 claimedBitIndex = index % 256;
+        
+        // Flip their specific bit to 1 (true)
         claimedBitMap[claimedWordIndex] = claimedBitMap[claimedWordIndex] | (1 << claimedBitIndex);
     }
 
-    /**
-     * @notice Claims rewards for a given index and amount.
-     */
+    // Users call this to get their tokens
     function claim(uint256 index, address account, uint256 amount, bytes32[] calldata merkleProof) external {
+        // Prevent claiming twice!
         if (isClaimed(index)) revert Ares_AlreadyClaimed();
 
-        // Verify the merkle proof.
+        // Check if their proof matches the merkle root we stored
         bytes32 node = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
         if (!MerkleProof.verify(merkleProof, merkleRoot, node)) revert Ares_InvalidProof();
 
-        // Mark it claimed and send the token.
+        // Record their claim in history BEFORE sending tokens
         _setClaimed(index);
         
-        // Use CEI - state is updated before external call
+        // Send the tokens safely
         rewardToken.safeTransfer(account, amount);
 
         emit RewardClaimed(index, account, amount);

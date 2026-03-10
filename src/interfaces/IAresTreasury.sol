@@ -1,59 +1,45 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/**
- * @title IAresTreasury
- * @notice Core interface for the ARES Treasury System.
- */
+// The main interface for the ARES Treasury System.
 interface IAresTreasury {
-    // --- Structs ---
 
+    // A single action to be executed by the treasury
     struct Action {
-        address target;
-        uint256 value;
-        string signature;
-        bytes data;
+        address target; // The contract to call
+        uint256 value;  // The amount of ETH to send
+        string signature; // Function signature (if any)
+        bytes data; // Extra data for the call
     }
 
+    // A proposal contains a list of actions securely
     struct Proposal {
         uint256 id;
         address proposer;
         Action[] actions;
         uint256 createdAt;
-        uint256 executeAfter;
+        uint256 executeAfter; // Timestamp when it can be executed
         ProposalState state;
         bytes32 descriptionHash;
     }
 
-    enum ActionState {
-        Unqueued,
-        Queued,
-        Executed,
-        Cancelled
-    }
+    // Possible states for an action
+    enum ActionState { Unqueued, Queued, Executed, Cancelled }
 
-    enum ProposalState {
-        None,
-        Created,
-        Queued,
-        Executable, // Time delay has passed
-        Executed,
-        Cancelled
-    }
+    // Possible states for a proposal
+    enum ProposalState { None, Created, Queued, Executable, Executed, Cancelled }
 
-    // --- Events ---
-
+    // Events to track what happens
     event ProposalCreated(uint256 indexed proposalId, address indexed proposer, bytes32 descriptionHash);
     event ProposalQueued(uint256 indexed proposalId, uint256 executeAfter);
     event ProposalExecuted(uint256 indexed proposalId);
     event ProposalCancelled(uint256 indexed proposalId);
-
+    
     event ActionQueued(bytes32 indexed actionId, uint256 executeAfter);
     event ActionExecuted(bytes32 indexed actionId);
     event ActionCancelled(bytes32 indexed actionId);
 
-    // --- Errors ---
-
+    // Custom errors for saving gas instead of require strings
     error Ares_InvalidSignature();
     error Ares_SignatureReplayed();
     error Ares_ProposalNotCreated();

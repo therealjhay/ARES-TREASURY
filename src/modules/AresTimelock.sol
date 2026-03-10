@@ -3,34 +3,32 @@ pragma solidity ^0.8.20;
 
 import {IAresTreasury} from "../interfaces/IAresTreasury.sol";
 
-/**
- * @title AresTimelock
- * @notice Queue-based execution engine enforcing temporal delays securely.
- * @dev Protects against reentrancy, transaction replacement, and timestamp manipulation.
- */
+// A "waiting room" for all transactions.
+// Nothing can happen immediately; everything must wait here first.
 contract AresTimelock is IAresTreasury {
+    // Limits on how long something must wait
     uint256 public constant MIN_DELAY = 1 days;
     uint256 public constant MAX_DELAY = 30 days;
+    // How long you have to execute it after the wait is over
     uint256 public constant GRACE_PERIOD = 14 days;
 
+    // The core vault where the money actually is
     address public immutable treasuryCore;
+    // The proposer contract that is allowed to send things here
     address public proposerModule;
 
+    // Details about an action waiting in line
     struct QueuedOperation {
-        uint256 executeAfter;
-        bool isQueued;
+        uint256 executeAfter; // Timestamp it becomes ready
+        bool isQueued;        // Is it currently in the waiting room?
     }
 
-    // operationId => QueuedOperation
+    // Looks up a queued action by its unique ID
     mapping(bytes32 => QueuedOperation) public queuedOperations;
 
+    // Only allow the proposer contract to send things here
     modifier onlyProposer() {
         if (msg.sender != proposerModule) revert Ares_Unauthorized();
-        _;
-    }
-
-    modifier onlySelf() {
-        if (msg.sender != address(this)) revert Ares_Unauthorized();
         _;
     }
 
@@ -40,9 +38,7 @@ contract AresTimelock is IAresTreasury {
         proposerModule = _proposerModule;
     }
 
-    /**
-     * @notice Generates a unique operation ID based on target, value, data, and a predecessor.
-     */
+    // Creates a unique fingerprint (ID) for an action based on its contents
     function getOperationId(
         address target,
         uint256 value,
@@ -53,9 +49,7 @@ contract AresTimelock is IAresTreasury {
         return keccak256(abi.encode(target, value, data, predecessor, salt));
     }
 
-    /**
-     * @notice Queues an operation to be executed after a delay.
-     */
+    // Adds a new action to the waiting room
     function queueOperation(
         address target,
         uint256 value,
@@ -64,12 +58,16 @@ contract AresTimelock is IAresTreasury {
         bytes32 salt,
         uint256 delay
     ) external onlyProposer returns (bytes32 operationId) {
+        // Check if the delay rules are followed
         if (delay < MIN_DELAY || delay > MAX_DELAY) revert Ares_TimelockNotMet();
 
+        // Calculate the fingerprint
         operationId = getOperationId(target, value, data, predecessor, salt);
 
+        // Don't add it twice
         if (queuedOperations[operationId].isQueued) revert Ares_ProposalAlreadyQueued();
 
+        // Save it to the waiting room
         uint256 executeAfter = block.timestamp + delay;
         queuedOperations[operationId] = QueuedOperation({
             executeAfter: executeAfter,
@@ -79,10 +77,7 @@ contract AresTimelock is IAresTreasury {
         emit ActionQueued(operationId, executeAfter);
     }
 
-    /**
-     * @notice Executes a queued operation.
-     * @dev Removes from queue before execution (Checks-Effects-Interactions)
-     */
+    // Runs the action if its waiting time has finished
     function executeOperation(
         address target,
         uint256 value,
@@ -93,21 +88,25 @@ contract AresTimelock is IAresTreasury {
         bytes32 operationId = getOperationId(target, value, data, predecessor, salt);
         QueuedOperation memory op = queuedOperations[operationId];
 
+        // Ensure it was actually queued
         if (!op.isQueued) revert Ares_ProposalNotQueued();
+        // Ensure its wait time is over
         if (block.timestamp < op.executeAfter) revert Ares_TimelockNotMet();
+        // Ensure it hasn't expired
         if (block.timestamp > op.executeAfter + GRACE_PERIOD) revert Ares_TimelockNotMet();
         
-        // Enforce predecessor constraint if specified
+        // If it requires another action to happen first, check that
         if (predecessor != bytes32(0) && queuedOperations[predecessor].isQueued) {
             revert Ares_TimelockNotMet();
         }
 
-        // State change before external call (Reentrancy protection)
+        // Delete it from the waiting room BEFORE running it
+        // This is extremely important to prevent hackers from running it twice!
         delete queuedOperations[operationId];
 
         emit ActionExecuted(operationId);
 
-        // Make the call to the Core to execute (which enforces limits)
+        // Tell the main vault to actually move the money or make the call
         bytes memory callData = abi.encodeWithSignature(
             "executeTransaction(address,uint256,bytes)",
             target,
@@ -122,9 +121,7 @@ contract AresTimelock is IAresTreasury {
         return returnData;
     }
 
-    /**
-     * @notice Cancels a queued operation
-     */
+    // Removes an action from the waiting room without running it
     function cancelOperation(bytes32 operationId) external onlyProposer {
         if (!queuedOperations[operationId].isQueued) revert Ares_ProposalNotQueued();
         delete queuedOperations[operationId];
