@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IAresTreasury} from "../interfaces/IAresTreasury.sol";
+import {IAresTimelock} from "../interfaces/IAresTimelock.sol";
 
-// A "waiting room" for all transactions.
-// Nothing can happen immediately; everything must wait here first.
-contract AresTimelock is IAresTreasury {
+contract AresTimelock is IAresTimelock {
     // Limits on how long something must wait
     uint256 public constant MIN_DELAY = 1 days;
     uint256 public constant MAX_DELAY = 30 days;
@@ -40,35 +38,35 @@ contract AresTimelock is IAresTreasury {
 
     // Creates a unique fingerprint (ID) for an action based on its contents
     function getOperationId(
-        address target,
-        uint256 value,
-        bytes memory data,
-        bytes32 predecessor,
+        address destinationContract,
+        uint256 ethAmount,
+        bytes memory payloadData,
+        bytes32 requiredPriorActionId,
         bytes32 salt
     ) public pure returns (bytes32) {
-        return keccak256(abi.encode(target, value, data, predecessor, salt));
+        return keccak256(abi.encode(destinationContract, ethAmount, payloadData, requiredPriorActionId, salt));
     }
 
     // Adds a new action to the waiting room
     function queueOperation(
-        address target,
-        uint256 value,
-        bytes memory data,
-        bytes32 predecessor,
+        address destinationContract,
+        uint256 ethAmount,
+        bytes memory payloadData,
+        bytes32 requiredPriorActionId,
         bytes32 salt,
-        uint256 delay
+        uint256 timelockDelaySeconds
     ) external onlyProposer returns (bytes32 operationId) {
         // Check if the delay rules are followed
-        if (delay < MIN_DELAY || delay > MAX_DELAY) revert Ares_TimelockNotMet();
+        if (timelockDelaySeconds < MIN_DELAY || timelockDelaySeconds > MAX_DELAY) revert Ares_TimelockNotMet();
 
         // Calculate the fingerprint
-        operationId = getOperationId(target, value, data, predecessor, salt);
+        operationId = getOperationId(destinationContract, ethAmount, payloadData, requiredPriorActionId, salt);
 
         // Don't add it twice
         if (queuedOperations[operationId].isQueued) revert Ares_ProposalAlreadyQueued();
 
         // Save it to the waiting room
-        uint256 executeAfter = block.timestamp + delay;
+        uint256 executeAfter = block.timestamp + timelockDelaySeconds;
         queuedOperations[operationId] = QueuedOperation({
             executeAfter: executeAfter,
             isQueued: true
@@ -79,24 +77,24 @@ contract AresTimelock is IAresTreasury {
 
     // Runs the action if its waiting time has finished
     function executeOperation(
-        address target,
-        uint256 value,
-        bytes memory data,
-        bytes32 predecessor,
+        address destinationContract,
+        uint256 ethAmount,
+        bytes memory payloadData,
+        bytes32 requiredPriorActionId,
         bytes32 salt
     ) external payable returns (bytes memory) {
-        bytes32 operationId = getOperationId(target, value, data, predecessor, salt);
-        QueuedOperation memory op = queuedOperations[operationId];
+        bytes32 operationId = getOperationId(destinationContract, ethAmount, payloadData, requiredPriorActionId, salt);
+        QueuedOperation memory queuedAction = queuedOperations[operationId];
 
         // Ensure it was actually queued
-        if (!op.isQueued) revert Ares_ProposalNotQueued();
+        if (!queuedAction.isQueued) revert Ares_ProposalNotQueued();
         // Ensure its wait time is over
-        if (block.timestamp < op.executeAfter) revert Ares_TimelockNotMet();
+        if (block.timestamp < queuedAction.executeAfter) revert Ares_TimelockNotMet();
         // Ensure it hasn't expired
-        if (block.timestamp > op.executeAfter + GRACE_PERIOD) revert Ares_TimelockNotMet();
+        if (block.timestamp > queuedAction.executeAfter + GRACE_PERIOD) revert Ares_TimelockNotMet();
         
         // If it requires another action to happen first, check that
-        if (predecessor != bytes32(0) && queuedOperations[predecessor].isQueued) {
+        if (requiredPriorActionId != bytes32(0) && queuedOperations[requiredPriorActionId].isQueued) {
             revert Ares_TimelockNotMet();
         }
 
@@ -109,16 +107,16 @@ contract AresTimelock is IAresTreasury {
         // Tell the main vault to actually move the money or make the call
         bytes memory callData = abi.encodeWithSignature(
             "executeTransaction(address,uint256,bytes)",
-            target,
-            value,
-            data
+            destinationContract,
+            ethAmount,
+            payloadData
         );
-        (bool success, bytes memory returnData) = treasuryCore.call(callData);
-        if (!success) {
+        (bool executionSuccessful, bytes memory actionReturnData) = treasuryCore.call(callData);
+        if (!executionSuccessful) {
             revert Ares_ActionFailed(0);
         }
 
-        return returnData;
+        return actionReturnData;
     }
 
     // Removes an action from the waiting room without running it

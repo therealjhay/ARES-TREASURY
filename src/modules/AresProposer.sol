@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IAresTreasury} from "../interfaces/IAresTreasury.sol";
+import {IAresProposer} from "../interfaces/IAresProposer.sol";
 import {EIP712Signer} from "../libraries/EIP712Signer.sol";
-import {AresTimelock} from "./AresTimelock.sol";
+import {IAresTimelock} from "../interfaces/IAresTimelock.sol";
 
-// This contract handles the creation and management of proposals.
-// A proposal is simply a request to do something with the treasury's funds.
-contract AresProposer is IAresTreasury {
+contract AresProposer is IAresProposer {
     // Unique identifier for signatures on this specific contract
     bytes32 public immutable DOMAIN_SEPARATOR;
     // The timelock contract where approved proposals go to wait
-    AresTimelock public immutable timelock;
+    IAresTimelock public immutable timelock;
 
     // Users must lock up 0.1 ETH to create a proposal (prevents spam)
     uint256 public constant PROPOSAL_BOND = 0.1 ether;
 
     // Tracks total proposals created
-    uint256 public proposalCount;
+    uint256 public totalProposalsCreated;
     // Looks up a proposal by its ID number
     mapping(uint256 => Proposal) public proposals;
     // Keeps track of how many proposals a user has made (prevents signature reuse)
@@ -26,7 +24,7 @@ contract AresProposer is IAresTreasury {
     // Runs once when deployed
     constructor(address _timelock) {
         if (_timelock == address(0)) revert Ares_Unauthorized();
-        timelock = AresTimelock(_timelock);
+        timelock = IAresTimelock(_timelock);
         // Setup signature requirements
         DOMAIN_SEPARATOR = EIP712Signer.getDomainSeparator("ARES Proposal", "1", address(this));
     }
@@ -59,7 +57,7 @@ contract AresProposer is IAresTreasury {
         nonces[proposer]++;
 
         // Create the new proposal
-        proposalId = ++proposalCount;
+        proposalId = ++totalProposalsCreated;
         Proposal storage newProposal = proposals[proposalId];
         newProposal.id = proposalId;
         newProposal.proposer = proposer;
@@ -76,13 +74,13 @@ contract AresProposer is IAresTreasury {
     }
 
     // Sends a created proposal to the timelock so it can wait the required days before execution
-    function queueProposal(uint256 proposalId, uint256 delay) external {
+    function queueProposal(uint256 proposalId, uint256 timelockDelaySeconds) external {
         Proposal storage proposal = proposals[proposalId];
         
         // Ensure it's in the correct state
         if (proposal.state != ProposalState.Created) revert Ares_ProposalNotCreated();
 
-        bytes32 predecessor = bytes32(0);
+        bytes32 requiredPriorActionId = bytes32(0);
         
         // Send each action to the timelock's waiting room
         for (uint256 i = 0; i < proposal.actions.length; ++i) {
@@ -92,17 +90,17 @@ contract AresProposer is IAresTreasury {
             bytes32 salt = keccak256(abi.encode(proposalId, i));
             
             timelock.queueOperation(
-                action.target,
-                action.value,
-                action.data,
-                predecessor,
+                action.destinationContract,
+                action.ethAmount,
+                action.payloadData,
+                requiredPriorActionId,
                 salt,
-                delay
+                timelockDelaySeconds
             );
         }
 
         // Record when it will be ready
-        proposal.executeAfter = block.timestamp + delay;
+        proposal.executeAfter = block.timestamp + timelockDelaySeconds;
         proposal.state = ProposalState.Queued;
 
         emit ProposalQueued(proposalId, proposal.executeAfter);
@@ -122,13 +120,13 @@ contract AresProposer is IAresTreasury {
         for (uint256 i = 0; i < proposal.actions.length; ++i) {
             Action memory action = proposal.actions[i];
             bytes32 salt = keccak256(abi.encode(proposalId, i));
-            bytes32 predecessor = bytes32(0);
+            bytes32 requiredPriorActionId = bytes32(0);
 
             timelock.executeOperation{value: 0}(
-                action.target,
-                action.value,
-                action.data,
-                predecessor,
+                action.destinationContract,
+                action.ethAmount,
+                action.payloadData,
+                requiredPriorActionId,
                 salt
             );
         }
@@ -158,9 +156,9 @@ contract AresProposer is IAresTreasury {
         for (uint256 i = 0; i < proposal.actions.length; ++i) {
             Action memory action = proposal.actions[i];
             bytes32 salt = keccak256(abi.encode(proposalId, i));
-            bytes32 predecessor = bytes32(0);
+            bytes32 requiredPriorActionId = bytes32(0);
             
-            bytes32 operationId = timelock.getOperationId(action.target, action.value, action.data, predecessor, salt);
+            bytes32 operationId = timelock.getOperationId(action.destinationContract, action.ethAmount, action.payloadData, requiredPriorActionId, salt);
             timelock.cancelOperation(operationId);
         }
 

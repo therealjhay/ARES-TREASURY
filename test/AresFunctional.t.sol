@@ -6,7 +6,7 @@ import {AresTreasuryCore} from "../src/core/AresTreasuryCore.sol";
 import {AresTimelock} from "../src/modules/AresTimelock.sol";
 import {AresProposer} from "../src/modules/AresProposer.sol";
 import {AresRewardDistributor} from "../src/modules/AresRewardDistributor.sol";
-import {IAresTreasury} from "../src/interfaces/IAresTreasury.sol";
+import {IAresProposer} from "../src/interfaces/IAresProposer.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 
@@ -57,7 +57,7 @@ contract AresFunctionalTest is Test {
         vm.deal(address(core), 100 ether); // Core has funds
     }
 
-    function _signProposal(uint256 pKey, address pAddr, uint256 nonce, bytes32 descHash, IAresTreasury.Action[] memory actions) internal returns (bytes memory) {
+    function _signProposal(uint256 pKey, address pAddr, uint256 nonce, bytes32 descHash, IAresProposer.Action[] memory actions) internal returns (bytes memory) {
         bytes32 actionsHash = keccak256(abi.encode(actions));
 
         bytes32 domainSeparator = keccak256(
@@ -89,12 +89,12 @@ contract AresFunctionalTest is Test {
     function test_ProposalLifecycleSuccess() public {
         vm.startPrank(userProposer);
 
-        IAresTreasury.Action[] memory actions = new IAresTreasury.Action[](1);
-        actions[0] = IAresTreasury.Action({
-            target: address(target),
-            value: 0.1 ether,
+        IAresProposer.Action[] memory actions = new IAresProposer.Action[](1);
+        actions[0] = IAresProposer.Action({
+            destinationContract: address(target),
+            ethAmount: 0.1 ether,
             signature: "",
-            data: abi.encodeWithSelector(MockTarget.inc.selector)
+            payloadData: abi.encodeWithSelector(MockTarget.inc.selector)
         });
 
         bytes32 descHash = keccak256("Increment target");

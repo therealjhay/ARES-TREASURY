@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IAresTreasury} from "../interfaces/IAresTreasury.sol";
+import {IAresTreasuryCore} from "../interfaces/IAresTreasuryCore.sol";
 
-// The main vault that safely holds the funds.
-// It uses a timelock to delay actions and a guardian for emergencies.
-contract AresTreasuryCore is IAresTreasury {
+contract AresTreasuryCore is IAresTreasuryCore {
     // The timelock contract that must approve all actions
     address public immutable timelock;
     // The guardian who can pause the contract if something goes wrong
@@ -67,12 +65,12 @@ contract AresTreasuryCore is IAresTreasury {
 
     // The function that actually sends funds or interacts with other contracts
     function executeTransaction(
-        address target,
-        uint256 value,
-        bytes calldata data
+        address destinationContract,
+        uint256 ethAmount,
+        bytes calldata payloadData
     ) external onlyTimelock whenNotPaused returns (bytes memory) {
         // Prevent calling this contract itself
-        if (target == address(this)) revert Ares_InvalidActionTarget();
+        if (destinationContract == address(this)) revert Ares_InvalidActionTarget();
         
         // If 7 days have passed, reset the withdrawal limit tracking
         if (block.timestamp >= currentEpochStart + EPOCH_LENGTH) {
@@ -81,24 +79,23 @@ contract AresTreasuryCore is IAresTreasury {
         }
 
         // Limit how much ETH can be withdrawn in the 7-day period
-        if (value > 0) {
-            uint256 currentBalance = address(this).balance + value; // balance before this transaction
+        if (ethAmount > 0) {
+            uint256 currentBalance = address(this).balance + ethAmount; // balance before this transaction
             uint256 maxAllowed = (currentBalance * MAX_WITHDRAWAL_BPS) / 10000;
 
-            if (epochWithdrawnAmount + value > maxAllowed) {
+            if (epochWithdrawnAmount + ethAmount > maxAllowed) {
                 revert Ares_RateLimitExceeded();
             }
-            epochWithdrawnAmount += value;
+            epochWithdrawnAmount += ethAmount;
         }
 
         // Perform the actual call to the target contract
-        (bool success, bytes memory returnData) = target.call{value: value}(data);
-        if (!success) revert Ares_ActionFailed(0);
+        (bool executionSuccessful, bytes memory actionReturnData) = destinationContract.call{value: ethAmount}(payloadData);
+        if (!executionSuccessful) revert Ares_ActionFailed(0);
 
-        emit TransactionExecuted(target, value, data);
-        return returnData;
+        emit TransactionExecuted(destinationContract, ethAmount, payloadData);
+        return actionReturnData;
     }
 
-    // Allow this contract to receive ETH
     receive() external payable {}
 }

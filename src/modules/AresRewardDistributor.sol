@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IAresTreasury} from "../interfaces/IAresTreasury.sol";
+import {IAresRewardDistributor} from "../interfaces/IAresRewardDistributor.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 // This contract lets users claim token rewards securely.
 // It uses a Merkle Tree so we don't have to store everyone's balance on-chain.
-contract AresRewardDistributor is IAresTreasury {
+contract AresRewardDistributor is IAresRewardDistributor {
     using SafeERC20 for IERC20;
 
     // The single hash representing all users and balances
@@ -66,20 +66,20 @@ contract AresRewardDistributor is IAresTreasury {
     }
 
     // Users call this to get their tokens
-    function claim(uint256 index, address account, uint256 amount, bytes32[] calldata merkleProof) external {
+    function claim(uint256 index, address beneficiaryAddress, uint256 rewardAmountTokens, bytes32[] calldata merkleProof) external {
         // Prevent claiming twice!
         if (isClaimed(index)) revert Ares_AlreadyClaimed();
 
         // Check if their proof matches the merkle root we stored
-        bytes32 node = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
+        bytes32 node = keccak256(bytes.concat(keccak256(abi.encode(index, beneficiaryAddress, rewardAmountTokens))));
         if (!MerkleProof.verify(merkleProof, merkleRoot, node)) revert Ares_InvalidProof();
 
         // Record their claim in history BEFORE sending tokens
         _setClaimed(index);
         
         // Send the tokens safely
-        rewardToken.safeTransfer(account, amount);
+        rewardToken.safeTransfer(beneficiaryAddress, rewardAmountTokens);
 
-        emit RewardClaimed(index, account, amount);
+        emit RewardClaimed(index, beneficiaryAddress, rewardAmountTokens);
     }
 }

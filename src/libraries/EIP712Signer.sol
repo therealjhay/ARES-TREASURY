@@ -4,8 +4,7 @@ pragma solidity ^0.8.20;
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
-// A library to safely verify signatures based on the EIP-712 standard.
-// It also helps avoid signature replay attacks.
+
 library EIP712Signer {
     // Type hashes define the structure of the data being signed
     bytes32 private constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
